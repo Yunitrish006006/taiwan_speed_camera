@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'speed_camera_alerts.dart';
 import 'speed_camera_data.dart';
 import 'speed_camera_repository.dart';
+import 'speed_camera_road_matcher.dart';
 
 /// Starts a user-controlled driving session with optional native background location.
 class SpeedCameraPage extends StatefulWidget {
@@ -15,9 +16,11 @@ class SpeedCameraPage extends StatefulWidget {
     super.key,
     required this.apiBaseUrl,
     this.backgroundLocationAvailable = false,
+    this.roadMatcher,
   });
   final String apiBaseUrl;
   final bool backgroundLocationAvailable;
+  final SpeedCameraRoadMatcher? roadMatcher;
 
   @override
   State<SpeedCameraPage> createState() => _SpeedCameraPageState();
@@ -219,7 +222,24 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
             headingDegrees: position.heading,
           )
         : const <SpeedCameraCandidate>[];
-    final closest = candidates.firstOrNull;
+    final matcher = widget.roadMatcher;
+    final roadId = candidates.isEmpty
+        ? null
+        : matcher?.match(
+            latitude: position.latitude,
+            longitude: position.longitude,
+            accuracyMeters: position.accuracy,
+            headingDegrees: position.heading,
+          );
+    final closest = candidates.where((candidate) {
+      final cameraRoad = matcher?.cameraRoadId(candidate.point.id);
+      return roadId == null || cameraRoad == null || roadId == cameraRoad;
+    }).firstOrNull;
+    final hasRoadEvidence =
+        matcher == null ||
+        (roadId != null &&
+            closest != null &&
+            matcher.cameraRoadId(closest.point.id) == roadId);
     setState(() {
       _position = position;
       _nearest = closest;
@@ -227,7 +247,10 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
     if (_nativeMobile &&
         _voiceEnabled &&
         !_speaking &&
-        _alerts.shouldSpeak(closest, position.timestamp)) {
+        _alerts.shouldSpeak(
+          hasRoadEvidence ? closest : null,
+          position.timestamp,
+        )) {
       unawaited(_speak(session));
     }
   }

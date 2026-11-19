@@ -24,3 +24,10 @@ without voice alerts.
   candidates. Native voice and background tracking require Android or iOS.
 
 Run `flutter analyze` and `flutter test` from the package root.
+
+A host can inject a `SpeedCameraRoadMatcher` built with a local road graph and
+reviewed camera-to-carriageway bindings. The matcher scores cross-track
+distance and heading, and abstains when roads overlap or GPS uncertainty
+allows multiple plausible roads. Without a graph, the app still reports
+location and direction candidates. The current Taiwan Brawl dataset
+integration supplies no road bindings.
