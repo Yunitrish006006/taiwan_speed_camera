@@ -42,10 +42,18 @@ void main() {
         '${platform.name} location lifecycle with background=$background',
         (tester) async {
           final ttsCalls = <MethodCall>[];
+          final exerciseFallback =
+              platform == TargetPlatform.android && !background;
+          var engineSelected = false;
           tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
             const MethodChannel('flutter_tts'),
             (call) async {
               ttsCalls.add(call);
+              if (exerciseFallback) {
+                if (call.method == 'getEngines') return ['test.android.tts'];
+                if (call.method == 'setEngine') engineSelected = true;
+                if (call.method == 'setLanguage' && !engineSelected) return 0;
+              }
               return 1;
             },
           );
@@ -93,8 +101,21 @@ void main() {
             await tester.tap(toggle);
             await tester.pumpAndSettle();
           }
+          if (exerciseFallback) {
+            final preview = find.text('試播語音提醒');
+            await tester.ensureVisible(preview);
+            await tester.tap(preview);
+            await tester.pumpAndSettle();
+            expect(engineSelected, isTrue);
+            expect(
+              ttsCalls.where((call) => call.method == 'speak'),
+              hasLength(1),
+            );
+            ttsCalls.clear();
+          }
           final start = find.text('開始行車模式');
-          await tester.ensureVisible(start);
+          await tester.scrollUntilVisible(start, 120);
+          await tester.pumpAndSettle();
           await tester.tap(start);
           await tester.pumpAndSettle();
           final settings = location.settings!;
@@ -127,11 +148,14 @@ void main() {
           expect(ttsCalls.where((call) => call.method == 'speak'), isEmpty);
           location.positions.add(sample(120.9974, 2));
           await tester.pumpAndSettle();
+          expect(ttsCalls.where((call) => call.method == 'speak'), isEmpty);
+          location.positions.add(sample(120.9978, 1));
+          await tester.pumpAndSettle();
           expect(
             ttsCalls.where((call) => call.method == 'speak'),
             hasLength(1),
           );
-          location.positions.add(sample(120.9978, 1));
+          location.positions.add(sample(120.9982, 0));
           await tester.pumpAndSettle();
           expect(
             ttsCalls.where((call) => call.method == 'speak'),

@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'speed_camera_alerts.dart';
 import 'speed_camera_data.dart';
+import 'speed_camera_motion.dart';
 import 'speed_camera_repository.dart';
 import 'speed_camera_road_matcher.dart';
 
@@ -35,6 +36,9 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
   StreamSubscription<ServiceStatus>? _serviceSubscription;
   SpeedCameraCatalog? _catalog;
   Position? _position;
+  final _motion = SpeedCameraMotion();
+  Timer? _fixTimeout;
+  double? _measuredSpeed;
   SpeedCameraCandidate? _nearest;
   bool _loading = true;
   bool _tracking = false;
@@ -45,6 +49,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
   bool _speaking = false;
   int _session = 0;
   String? _message;
+  String? _voiceMessage;
 
   bool get _nativeMobile =>
       !kIsWeb &&
@@ -102,9 +107,10 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
 
   LocationSettings _locationSettings() {
     const accuracy = LocationAccuracy.bestForNavigation;
-    const distanceFilter = 10;
+    const distanceFilter = 0;
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       return AndroidSettings(
+        intervalDuration: const Duration(seconds: 2),
         accuracy: accuracy,
         distanceFilter: distanceFilter,
         foregroundNotificationConfig: _continueInBackground
@@ -208,9 +214,21 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
             !position.timestamp.isAfter(_position!.timestamp))) {
       return;
     }
+    final motionSpeed = _motion.measure(position);
+    _fixTimeout?.cancel();
+    _fixTimeout = Timer(const Duration(seconds: 12), () {
+      if (!mounted || session != _session) return;
+      _motion.reset();
+      _alerts.shouldSpeak(null, DateTime.now());
+      setState(() {
+        _position = null;
+        _measuredSpeed = null;
+        _nearest = null;
+      });
+    });
     final candidates =
-        position.speed.isFinite &&
-            position.speed >= 2.5 &&
+        motionSpeed != null &&
+            motionSpeed >= 2.5 &&
             position.headingAccuracy.isFinite &&
             position.headingAccuracy >= 0 &&
             position.headingAccuracy <= 45
@@ -242,6 +260,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
             matcher.cameraRoadId(closest.point.id) == roadId);
     setState(() {
       _position = position;
+      _measuredSpeed = motionSpeed;
       _nearest = closest;
     });
     if (_nativeMobile &&
@@ -255,11 +274,35 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
     }
   }
 
+  Future<bool> _useTraditionalChinese() async {
+    try {
+      if (await _tts.setLanguage('zh-TW') == 1) return true;
+    } catch (_) {
+      // Android can have a restored default engine that is no longer installed.
+    }
+    if (defaultTargetPlatform != TargetPlatform.android) return false;
+    final engines = await _tts.getEngines;
+    if (engines is! List) return false;
+
+    for (final engine in engines.whereType<String>()) {
+      try {
+        await _tts.setEngine(engine);
+        if (await _tts.setLanguage('zh-TW') == 1) return true;
+      } catch (_) {
+        // Try another installed engine before reporting speech is unavailable.
+      }
+    }
+    return false;
+  }
+
   Future<void> _speak(int session) async {
-    _speaking = true;
+    setState(() {
+      _speaking = true;
+      _voiceMessage = null;
+    });
     try {
       await _tts.awaitSpeakCompletion(true);
-      if (await _tts.setLanguage('zh-TW') != 1) {
+      if (!await _useTraditionalChinese()) {
         throw StateError('zh-TW voice unavailable');
       }
       await _tts.setSpeechRate(0.47);
@@ -269,11 +312,11 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
     } catch (_) {
       if (mounted && session == _session) {
         setState(() {
-          _message = '語音播放失敗，請確認手機已安裝繁中語音。';
+          _voiceMessage = '語音播放失敗，請檢查手機的文字轉語音引擎及繁中語音。';
         });
       }
     } finally {
-      _speaking = false;
+      if (mounted) setState(() => _speaking = false);
     }
   }
 
@@ -286,6 +329,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
       _stopping = true;
       _nearest = null;
       _position = null;
+      _measuredSpeed = null;
       _message = message;
     });
     try {
@@ -300,6 +344,9 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
   }
 
   Future<void> _releaseTracking() async {
+    _fixTimeout?.cancel();
+    _fixTimeout = null;
+    _motion.reset();
     final position = _positionSubscription;
     final service = _serviceSubscription;
     _positionSubscription = null;
@@ -347,9 +394,8 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
   @override
   Widget build(BuildContext context) {
     const accent = Color(0xFF64E2C4);
-    final measuredSpeed = _position?.speed;
-    final speed =
-        measuredSpeed == null || !measuredSpeed.isFinite || measuredSpeed < 0
+    final measuredSpeed = _measuredSpeed;
+    final speed = measuredSpeed == null
         ? '--'
         : (measuredSpeed * 3.6).clamp(0, 250).round().toString();
     final nearest = _nearest;
@@ -488,6 +534,8 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                     ? null
                     : (value) => setState(() => _continueInBackground = value),
               ),
+            ],
+            if (_nativeMobile) ...[
               SwitchListTile(
                 title: const Text(
                   '語音提醒',
@@ -498,6 +546,18 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                     ? null
                     : (value) => setState(() => _voiceEnabled = value),
               ),
+              OutlinedButton.icon(
+                onPressed: _speaking || _starting || _stopping
+                    ? null
+                    : () => unawaited(_speak(_session)),
+                icon: const Icon(Icons.volume_up_outlined),
+                label: const Text('試播語音提醒'),
+              ),
+              if (_voiceMessage != null)
+                Text(
+                  _voiceMessage!,
+                  style: const TextStyle(color: Color(0xFFFFC89A)),
+                ),
             ],
             const SizedBox(height: 22),
             SizedBox(
@@ -513,6 +573,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                 onPressed:
                     _starting ||
                         _stopping ||
+                        (_speaking && !_tracking) ||
                         (!_tracking && (_loading || catalog == null))
                     ? null
                     : _tracking
