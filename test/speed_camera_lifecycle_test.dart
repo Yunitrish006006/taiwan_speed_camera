@@ -81,6 +81,7 @@ void main() {
         });
 
         SharedPreferences.setMockInitialValues({
+          if (overlay) 'speed_camera_overlay_speed_sp': 80,
           'speed_camera_npa7320_snapshot_v1': jsonEncode({
             'schemaVersion': 1,
             'source': 'NPA-7320',
@@ -110,6 +111,22 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
+        if (overlay) {
+          await tester.tap(find.byTooltip('測速設定'));
+          await tester.pumpAndSettle();
+          expect(find.text('浮窗車速數字大小：80 sp'), findsOneWidget);
+          await tester.tap(find.byType(Slider));
+          await tester.pumpAndSettle();
+          expect(find.text('浮窗車速數字大小：104 sp'), findsOneWidget);
+          expect(
+            (await SharedPreferences.getInstance()).getInt(
+              'speed_camera_overlay_speed_sp',
+            ),
+            104,
+          );
+          await tester.pageBack();
+          await tester.pumpAndSettle();
+        }
         if (background) {
           final toggle = find.text(overlay ? '桌面測速浮窗' : '鎖定螢幕後繼續本次行程');
           await tester.ensureVisible(toggle);
@@ -189,7 +206,9 @@ void main() {
           expect(
             overlayCalls.any(
               (call) =>
-                  call.method == 'update' && call.arguments['speed'] != null,
+                  call.method == 'update' &&
+                  call.arguments['speed'] != null &&
+                  call.arguments['sizeSp'] == 104,
             ),
             isTrue,
           );

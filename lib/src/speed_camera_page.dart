@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'speed_camera_alerts.dart';
 import 'speed_camera_data.dart';
@@ -49,6 +50,23 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
   bool _stopping = false;
   bool _continueInBackground = false;
   static const _overlay = MethodChannel('taiwan_brawl/speed_overlay');
+  static const _sizeKey = 'speed_camera_overlay_speed_sp';
+  static const _minSize = 32;
+  static const _maxSize = 176;
+  int _overlaySize = _maxSize;
+
+  Future<void> _loadOverlaySize() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _overlaySize = (preferences.getInt(_sizeKey) ?? _maxSize).clamp(
+        _minSize,
+        _maxSize,
+      );
+    });
+    await _updateOverlay();
+  }
+
   bool _overlayEnabled = false;
   bool _awaitingOverlayPermission = false;
   bool get _backgroundSession => _continueInBackground || _overlayEnabled;
@@ -78,10 +96,79 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
     }
   }
 
+  Future<void> _openSettings() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    var size =
+        preferences.getInt(_sizeKey)?.clamp(_minSize, _maxSize) ?? _maxSize;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          appBar: AppBar(title: const Text('測速設定')),
+          body: SafeArea(
+            child: StatefulBuilder(
+              builder: (context, updatePreview) {
+                return ListView(
+                  padding: const EdgeInsets.all(20),
+                  children: [
+                    Text(
+                      '浮窗車速數字大小：$size sp',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    Slider(
+                      min: _minSize.toDouble(),
+                      max: _maxSize.toDouble(),
+                      divisions: 36,
+                      value: size.toDouble(),
+                      label: '$size sp',
+                      onChanged: (value) =>
+                          updatePreview(() => size = value.round()),
+                      onChangeEnd: (value) async {
+                        _overlaySize = value.round();
+                        await preferences.setInt(_sizeKey, _overlaySize);
+                        if (mounted) await _updateOverlay();
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    Center(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xff111f2b),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          child: Text(
+                            '88',
+                            semanticsLabel: '車速數字預覽',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              height: 1.1,
+                              fontSize: size.toDouble(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _updateOverlay() async {
     if (!_overlayEnabled || !_tracking) return;
     try {
       await _overlay.invokeMethod<void>('update', {
+        'sizeSp': _overlaySize,
         'speed': _measuredSpeed == null
             ? null
             : (_measuredSpeed! * 3.6).clamp(0, 250).round(),
@@ -116,6 +203,11 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
     WidgetsBinding.instance.addObserver(this);
     _repository = SpeedCameraRepository(baseUrl: widget.apiBaseUrl);
     unawaited(_loadCatalog());
+    if (widget.androidOverlayAvailable &&
+        !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(_loadOverlaySize());
+    }
   }
 
   @override
@@ -227,12 +319,13 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
       });
       unawaited(_updateOverlay());
       _positionSubscription =
-          Geolocator.getPositionStream(locationSettings: _locationSettings())
-              .listen(
-                (position) => _handlePosition(position, session),
-                onError: (Object error) => _locationEnded(session),
-                onDone: () => _locationEnded(session),
-              );
+          Geolocator.getPositionStream(
+            locationSettings: _locationSettings(),
+          ).listen(
+            (position) => _handlePosition(position, session),
+            onError: (Object error) => _locationEnded(session),
+            onDone: () => _locationEnded(session),
+          );
       if (_nativeMobile) {
         _serviceSubscription = Geolocator.getServiceStatusStream().listen((
           status,
@@ -461,6 +554,14 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
         foregroundColor: Colors.white,
         title: const Text('行車測速提醒'),
         actions: [
+          if (widget.androidOverlayAvailable &&
+              !kIsWeb &&
+              defaultTargetPlatform == TargetPlatform.android)
+            IconButton(
+              onPressed: _openSettings,
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: '測速設定',
+            ),
           IconButton(
             onPressed: _loading ? null : _loadCatalog,
             icon: const Icon(Icons.sync_rounded),
@@ -579,7 +680,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
               ),
             if (_supportsBackground &&
                 widget.androidOverlayAvailable &&
-                defaultTargetPlatform == TargetPlatform.android)
+                defaultTargetPlatform == TargetPlatform.android) ...[
               SwitchListTile(
                 title: const Text(
                   '桌面測速浮窗',
@@ -594,6 +695,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                     ? null
                     : _enableOverlay,
               ),
+            ],
             if (_supportsBackground) ...[
               SwitchListTile(
                 title: const Text(
