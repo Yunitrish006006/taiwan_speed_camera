@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -18,9 +19,11 @@ class SpeedCameraPage extends StatefulWidget {
     required this.apiBaseUrl,
     this.backgroundLocationAvailable = false,
     this.roadMatcher,
+    this.androidOverlayAvailable = false,
   });
   final String apiBaseUrl;
   final bool backgroundLocationAvailable;
+  final bool androidOverlayAvailable;
   final SpeedCameraRoadMatcher? roadMatcher;
 
   @override
@@ -45,6 +48,51 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
   bool _starting = false;
   bool _stopping = false;
   bool _continueInBackground = false;
+  static const _overlay = MethodChannel('taiwan_brawl/speed_overlay');
+  bool _overlayEnabled = false;
+  bool _awaitingOverlayPermission = false;
+  bool get _backgroundSession => _continueInBackground || _overlayEnabled;
+
+  Future<void> _enableOverlay(bool enable) async {
+    try {
+      if (enable && await _overlay.invokeMethod<bool>('allowed') != true) {
+        if (!mounted) return;
+        _awaitingOverlayPermission = true;
+        await _overlay.invokeMethod<void>('settings');
+        return;
+      }
+      if (mounted) setState(() => _overlayEnabled = enable);
+    } on PlatformException {
+      if (mounted) setState(() => _message = '無法開啟浮窗，請檢查系統權限。');
+    }
+  }
+
+  Future<void> _finishOverlayPermission() async {
+    _awaitingOverlayPermission = false;
+    final allowed = await _overlay.invokeMethod<bool>('allowed') == true;
+    if (mounted) {
+      setState(() {
+        _overlayEnabled = allowed;
+        if (!allowed) _message = '開啟桌面浮窗需要允許「顯示在其他應用程式上層」。';
+      });
+    }
+  }
+
+  Future<void> _updateOverlay() async {
+    if (!_overlayEnabled || !_tracking) return;
+    try {
+      await _overlay.invokeMethod<void>('update', {
+        'speed': _measuredSpeed == null
+            ? null
+            : (_measuredSpeed! * 3.6).clamp(0, 250).round(),
+        'distance': _nearest?.distanceMeters.round(),
+        'limit': _nearest?.point.speedLimitKmh,
+      });
+    } on PlatformException {
+      if (mounted && _tracking) setState(() => _message = '浮窗無法顯示，請確認上層顯示權限。');
+    }
+  }
+
   bool _voiceEnabled = true;
   bool _speaking = false;
   int _session = 0;
@@ -72,8 +120,11 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _awaitingOverlayPermission) {
+      unawaited(_finishOverlayPermission());
+    }
     if (state == AppLifecycleState.detached ||
-        (!_continueInBackground &&
+        (!_backgroundSession &&
             (state == AppLifecycleState.hidden ||
                 state == AppLifecycleState.paused))) {
       unawaited(_stopTracking());
@@ -113,7 +164,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
         intervalDuration: const Duration(seconds: 2),
         accuracy: accuracy,
         distanceFilter: distanceFilter,
-        foregroundNotificationConfig: _continueInBackground
+        foregroundNotificationConfig: _backgroundSession
             ? const ForegroundNotificationConfig(
                 notificationTitle: '行車測速提醒',
                 notificationText: '行車定位中，回到 App 可結束行車模式。',
@@ -174,14 +225,14 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
         _tracking = true;
         _starting = false;
       });
+      unawaited(_updateOverlay());
       _positionSubscription =
-          Geolocator.getPositionStream(
-            locationSettings: _locationSettings(),
-          ).listen(
-            (position) => _handlePosition(position, session),
-            onError: (Object error) => _locationEnded(session),
-            onDone: () => _locationEnded(session),
-          );
+          Geolocator.getPositionStream(locationSettings: _locationSettings())
+              .listen(
+                (position) => _handlePosition(position, session),
+                onError: (Object error) => _locationEnded(session),
+                onDone: () => _locationEnded(session),
+              );
       if (_nativeMobile) {
         _serviceSubscription = Geolocator.getServiceStatusStream().listen((
           status,
@@ -225,6 +276,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
         _measuredSpeed = null;
         _nearest = null;
       });
+      unawaited(_updateOverlay());
     });
     final candidates =
         motionSpeed != null &&
@@ -263,6 +315,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
       _measuredSpeed = motionSpeed;
       _nearest = closest;
     });
+    unawaited(_updateOverlay());
     if (_nativeMobile &&
         _voiceEnabled &&
         !_speaking &&
@@ -352,6 +405,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
     _positionSubscription = null;
     _serviceSubscription = null;
     await Future.wait([
+      if (_overlayEnabled) _overlay.invokeMethod<void>('clear'),
       if (position != null) position.cancel().catchError((Object _) {}),
       if (service != null) service.cancel().catchError((Object _) {}),
       if (_nativeMobile)
@@ -523,14 +577,32 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                   style: const TextStyle(color: Color(0xFFFFC89A)),
                 ),
               ),
+            if (_supportsBackground &&
+                widget.androidOverlayAvailable &&
+                defaultTargetPlatform == TargetPlatform.android)
+              SwitchListTile(
+                title: const Text(
+                  '桌面測速浮窗',
+                  style: TextStyle(color: Colors.white),
+                ),
+                subtitle: const Text(
+                  '開始行車後回到桌面即可查看，長按拖曳可移動。',
+                  style: TextStyle(color: Colors.white70),
+                ),
+                value: _overlayEnabled,
+                onChanged: _tracking || _starting || _stopping
+                    ? null
+                    : _enableOverlay,
+              ),
             if (_supportsBackground) ...[
               SwitchListTile(
                 title: const Text(
                   '鎖定螢幕後繼續本次行程',
                   style: TextStyle(color: Colors.white),
                 ),
-                value: _continueInBackground,
-                onChanged: _tracking || _starting || _stopping
+                value: _backgroundSession,
+                onChanged:
+                    _tracking || _starting || _stopping || _overlayEnabled
                     ? null
                     : (value) => setState(() => _continueInBackground = value),
               ),
