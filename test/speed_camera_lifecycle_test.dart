@@ -116,7 +116,7 @@ void main() {
           await tester.pumpAndSettle();
           expect(find.text('浮窗車速數字大小：80 sp'), findsOneWidget);
           await tester.tapAt(
-            tester.getRect(find.byType(Slider)).centerRight -
+            tester.getRect(find.byType(Slider).first).centerRight -
                 const Offset(2, 0),
           );
           await tester.pumpAndSettle();
@@ -127,6 +127,19 @@ void main() {
             ),
             352,
           );
+          await tester.tap(find.byKey(const ValueKey('overlayTransparency')));
+          await tester.pumpAndSettle();
+          expect(find.text('背景透明度：50%'), findsOneWidget);
+          for (final choice in [('overlayInk', '黃色'), ('overlayFill', '黑色')]) {
+            await tester.tap(find.byKey(ValueKey(choice.$1)));
+            await tester.pumpAndSettle();
+            await tester.tap(find.text(choice.$2).last);
+            await tester.pumpAndSettle();
+          }
+          final appearance = await SharedPreferences.getInstance();
+          expect(appearance.getInt('speed_camera_overlay_transparency'), 50);
+          expect(appearance.getInt('speed_camera_overlay_ink'), 0xffffd54f);
+          expect(appearance.getInt('speed_camera_overlay_fill'), 0xff000000);
           await tester.pageBack();
           await tester.pumpAndSettle();
         }
@@ -211,7 +224,10 @@ void main() {
               (call) =>
                   call.method == 'update' &&
                   call.arguments['speed'] != null &&
-                  call.arguments['sizeSp'] == 352,
+                  call.arguments['sizeSp'] == 352 &&
+                  call.arguments['transparency'] == 50 &&
+                  call.arguments['ink'] == 0xffffd54f &&
+                  call.arguments['fill'] == 0xff000000,
             ),
             isTrue,
           );

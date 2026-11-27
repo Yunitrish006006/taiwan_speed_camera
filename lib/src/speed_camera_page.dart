@@ -55,11 +55,34 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
   static const _maxSize = 352;
   static const _defaultSize = 176;
   int _overlaySize = _defaultSize;
+  static const _inkKey = 'speed_camera_overlay_ink';
+  static const _fillKey = 'speed_camera_overlay_fill';
+  static const _transparencyKey = 'speed_camera_overlay_transparency';
+  static const _palette = {
+    0xffffffff: '白色',
+    0xff111f2b: '深藍',
+    0xff000000: '黑色',
+    0xffffd54f: '黃色',
+    0xffff7043: '橘紅',
+    0xff69f0ae: '薄荷綠',
+    0xff64b5f6: '淺藍',
+    0xffce93d8: '淡紫',
+  };
+  int _ink = 0xffffffff;
+  int _fill = 0xff111f2b;
+  int _transparency = 0;
+  int _savedColor(SharedPreferences prefs, String key, int fallback) {
+    final value = prefs.getInt(key);
+    return value != null && _palette.containsKey(value) ? value : fallback;
+  }
 
   Future<void> _loadOverlaySize() async {
     final preferences = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
+      _ink = _savedColor(preferences, _inkKey, 0xffffffff);
+      _fill = _savedColor(preferences, _fillKey, 0xff111f2b);
+      _transparency = (preferences.getInt(_transparencyKey) ?? 0).clamp(0, 100);
       _overlaySize = (preferences.getInt(_sizeKey) ?? _defaultSize).clamp(
         _minSize,
         _maxSize,
@@ -130,11 +153,74 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                         if (mounted) await _updateOverlay();
                       },
                     ),
+                    Text('背景透明度：$_transparency%'),
+                    Slider(
+                      key: const ValueKey('overlayTransparency'),
+                      min: 0,
+                      max: 100,
+                      divisions: 20,
+                      value: _transparency.toDouble(),
+                      label: '$_transparency%',
+                      onChanged: (v) =>
+                          updatePreview(() => _transparency = v.round()),
+                      onChangeEnd: (v) async {
+                        await preferences.setInt(_transparencyKey, v.round());
+                        if (mounted) await _updateOverlay();
+                      },
+                    ),
+                    for (final isInk in [true, false])
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(isInk ? '字體顏色' : '背景顏色'),
+                        trailing: DropdownButton<int>(
+                          key: ValueKey(isInk ? 'overlayInk' : 'overlayFill'),
+                          value: isInk ? _ink : _fill,
+                          items: [
+                            for (final entry in _palette.entries)
+                              DropdownMenuItem(
+                                value: entry.key,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 18,
+                                      height: 18,
+                                      decoration: BoxDecoration(
+                                        color: Color(entry.key),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(color: Colors.grey),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(entry.value),
+                                  ],
+                                ),
+                              ),
+                          ],
+                          onChanged: (value) async {
+                            if (value == null) return;
+                            updatePreview(() {
+                              if (isInk) {
+                                _ink = value;
+                              } else {
+                                _fill = value;
+                              }
+                            });
+                            await preferences.setInt(
+                              isInk ? _inkKey : _fillKey,
+                              value,
+                            );
+                            if (mounted) await _updateOverlay();
+                          },
+                        ),
+                      ),
                     const SizedBox(height: 16),
                     Center(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: const Color(0xff111f2b),
+                          color: Color(
+                            _fill,
+                          ).withValues(alpha: 1 - _transparency / 100),
                           borderRadius: BorderRadius.circular(14),
                         ),
                         child: Padding(
@@ -148,7 +234,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                               '88',
                               semanticsLabel: '車速數字預覽',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: Color(_ink),
                                 fontWeight: FontWeight.bold,
                                 height: 1.1,
                                 fontSize: size.toDouble(),
@@ -173,6 +259,9 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
     try {
       await _overlay.invokeMethod<void>('update', {
         'sizeSp': _overlaySize,
+        'ink': _ink,
+        'fill': _fill,
+        'transparency': _transparency,
         'speed': _measuredSpeed == null
             ? null
             : (_measuredSpeed! * 3.6).clamp(0, 250).round(),
