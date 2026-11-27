@@ -115,14 +115,17 @@ void main() {
           await tester.tap(find.byTooltip('測速設定'));
           await tester.pumpAndSettle();
           expect(find.text('浮窗車速數字大小：80 sp'), findsOneWidget);
-          await tester.tap(find.byType(Slider));
+          await tester.tapAt(
+            tester.getRect(find.byType(Slider)).centerRight -
+                const Offset(2, 0),
+          );
           await tester.pumpAndSettle();
-          expect(find.text('浮窗車速數字大小：104 sp'), findsOneWidget);
+          expect(find.text('浮窗車速數字大小：352 sp'), findsOneWidget);
           expect(
             (await SharedPreferences.getInstance()).getInt(
               'speed_camera_overlay_speed_sp',
             ),
-            104,
+            352,
           );
           await tester.pageBack();
           await tester.pumpAndSettle();
@@ -208,7 +211,7 @@ void main() {
               (call) =>
                   call.method == 'update' &&
                   call.arguments['speed'] != null &&
-                  call.arguments['sizeSp'] == 104,
+                  call.arguments['sizeSp'] == 352,
             ),
             isTrue,
           );

@@ -52,14 +52,15 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
   static const _overlay = MethodChannel('taiwan_brawl/speed_overlay');
   static const _sizeKey = 'speed_camera_overlay_speed_sp';
   static const _minSize = 32;
-  static const _maxSize = 176;
-  int _overlaySize = _maxSize;
+  static const _maxSize = 352;
+  static const _defaultSize = 176;
+  int _overlaySize = _defaultSize;
 
   Future<void> _loadOverlaySize() async {
     final preferences = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      _overlaySize = (preferences.getInt(_sizeKey) ?? _maxSize).clamp(
+      _overlaySize = (preferences.getInt(_sizeKey) ?? _defaultSize).clamp(
         _minSize,
         _maxSize,
       );
@@ -100,7 +101,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
     final preferences = await SharedPreferences.getInstance();
     if (!mounted) return;
     var size =
-        preferences.getInt(_sizeKey)?.clamp(_minSize, _maxSize) ?? _maxSize;
+        preferences.getInt(_sizeKey)?.clamp(_minSize, _maxSize) ?? _defaultSize;
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (context) => Scaffold(
@@ -118,7 +119,7 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                     Slider(
                       min: _minSize.toDouble(),
                       max: _maxSize.toDouble(),
-                      divisions: 36,
+                      divisions: (_maxSize - _minSize) ~/ 4,
                       value: size.toDouble(),
                       label: '$size sp',
                       onChanged: (value) =>
@@ -141,14 +142,17 @@ class _SpeedCameraPageState extends State<SpeedCameraPage>
                             horizontal: 14,
                             vertical: 8,
                           ),
-                          child: Text(
-                            '88',
-                            semanticsLabel: '車速數字預覽',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              height: 1.1,
-                              fontSize: size.toDouble(),
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              '88',
+                              semanticsLabel: '車速數字預覽',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                height: 1.1,
+                                fontSize: size.toDouble(),
+                              ),
                             ),
                           ),
                         ),
